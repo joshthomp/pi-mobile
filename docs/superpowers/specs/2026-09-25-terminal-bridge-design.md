@@ -71,8 +71,8 @@ Behavior:
 - **Skip server-owned `pi`.** If `PI_MOBILE_RPC=1` is set, do nothing. The
   server sets this in `piEnv()` for every `pi` it starts. Without this, a phone
   turn's own `pi --mode rpc` registers as a bridge.
-- **Skip non-interactive modes.** If `ctx.hasUI` is false (print, json, rpc
-  modes), do nothing.
+- **Skip non-interactive modes.** If `ctx.mode !== "tui"` (print, json, rpc
+  modes), do nothing. Do not use `ctx.hasUI`: it is also true in rpc mode.
 - **Start at `session_start`**, not in the factory (Pi docs rule). Keep the
   latest `ctx`. A new `session_start` (`/new`, `/resume`) replaces the session
   id. The next poll carries the new id.
@@ -134,6 +134,10 @@ Rules for a terminal session:
   terminal owns them. The terminal's own approval flow (if any) runs on the Mac.
 - Images from the phone pass through as Pi `ImageContent` blocks.
 - `piEnv()` adds `PI_MOBILE_RPC=1`.
+- `Bun.serve` gets `idleTimeout: 30`. Bun's default of 10 s closes a 25 s
+  long-poll.
+- A loopback-only `GET /bridge/list` returns `[{pid, session_id, cwd, running}]`
+  so tests and a user can see which terminals are connected.
 
 ### 5.3 Install: `server/install.sh`
 
