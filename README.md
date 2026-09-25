@@ -58,6 +58,7 @@ Open `PiMobile.xcodeproj` in Xcode (26+), build to your device (iOS 26+). Then e
 ## Caveats
 
 - Turns default to **Auto** tool permissions. **Ask** mode confirms each tool on the phone via the bundled `server/pi-mobile-approval` extension (loaded for that turn; optional `pi install` for desktop use too).
+- A turn running in a terminal `pi` shows as in progress on the phone and updates at each step. The phone detects it from the session file plus a live `pi` process in that folder.
 - A session that's open in a terminal `pi` and driven from the phone at the same time can race; finish one before the other (Pi's file format keeps history safe either way).
 - Session titles are derived from the first user message (Pi sessions have no title field).
 

@@ -3,7 +3,7 @@
 // Pi surface (session JSONL v3, RPC protocol) — no undocumented internals.
 // Run: bun run server.ts   (prints the auth token to give the phone app)
 import { homedir } from "os";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, renameSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, renameSync, realpathSync } from "fs";
 import { resolve, basename, dirname } from "path";
 
 const SESSIONS_ROOT = `${homedir()}/.pi/agent/sessions`;
@@ -963,8 +963,52 @@ const repos = () => {
     .sort((a, b) => a.name.localeCompare(b.name));
 };
 
+// ── Terminal turns ──────────────────────────────────────────────────────────
+// A turn run from a terminal `pi` is not in `turns`. Treat a session as live
+// when its last message is an open turn (not a final assistant reply) AND a
+// live `pi` process has that session's cwd as its working directory.
+// ponytail: two terminal pis in one folder can mark a crashed older session
+// live too; match the file each pi holds open if that matters.
+const FINAL_STOPS = new Set(["stop", "error", "aborted"]);
+function lastTurnOpen(jsonl: string): boolean {
+  const lines = jsonl.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].includes('"message"')) continue;
+    let e: any;
+    try { e = JSON.parse(lines[i]); } catch { continue; }
+    if (e.type !== "message") continue;
+    return !(e.message?.role === "assistant" && FINAL_STOPS.has(e.message?.stopReason));
+  }
+  return false; // no messages yet
+}
+
+let piCwdCache: { at: number; cwds: Set<string> } = { at: 0, cwds: new Set() };
+function piProcessCwds(): Set<string> {
+  if (Date.now() - piCwdCache.at < 2_000) return piCwdCache.cwds;
+  const cwds = new Set<string>();
+  try {
+    const ps = Bun.spawnSync(["ps", "-axo", "pid=,comm="], { stdout: "pipe" }).stdout.toString();
+    const pids = ps.split("\n").map((l) => l.trim().split(/\s+/)).filter(([, c]) => c === "pi").map(([p]) => p);
+    if (pids.length) {
+      const out = Bun.spawnSync(["lsof", "-a", "-p", pids.join(","), "-d", "cwd", "-Fn"], { stdout: "pipe", stderr: "pipe" });
+      for (const l of out.stdout.toString().split("\n")) if (l.startsWith("n")) cwds.add(l.slice(1));
+    }
+  } catch {} // ps/lsof missing → no terminal detection, same as before
+  piCwdCache = { at: Date.now(), cwds };
+  return cwds;
+}
+
+const terminalTurnActive = (file: string, cwd: string) => {
+  try {
+    // lsof reports resolved paths (/var → /private/var, symlinked repos).
+    if (!piProcessCwds().has(realpathSync(cwd))) return false;
+    return lastTurnOpen(readFileSync(file, "utf8")); } catch { return false; }
+};
+
 function workspaceStatus(ws: Ws): string {
   if ([...turns.values()].some((t) => t.running && t.cwd === ws.cwd)) return "in-progress";
+  const newest = ws.dir ? sessionFiles(ws.dir)[0] : null;
+  if (newest && terminalTurnActive(`${ws.dir}/${newest}`, ws.cwd)) return "in-progress";
   // Fresh workspaces / no sessions on disk yet — not “done”, just waiting for first send.
   if (!ws.dir || ws.sessionCount === 0) return "not-started";
   return "done";
@@ -1078,7 +1122,9 @@ Bun.serve({
       }
       if (req.method === "POST" && (m = path.match(/^\/sessions\/([^/]+)\/stop$/))) {
         const t = turns.get(m[1]);
-        try { t?.proc?.stdin?.write(JSON.stringify({ id: "stop", type: "abort" }) + "\n"); } catch {}
+        try { t?.proc?.stdin?.write(JSON.stringify({ id: "stop", type: "abort" }) + "\n"); } catch (e) {
+          console.warn(`stop: abort write failed, killing pi instead: ${e}`); // stdin already closed
+        }
         t?.proc?.kill();
         return Response.json({ ok: true });
       }
@@ -1137,8 +1183,9 @@ Bun.serve({
       }
       if ((m = path.match(/^\/sessions\/([^/]+)\/status$/))) {
         const t = turns.get(m[1]);
+        const f = t?.running ? null : findSessionFile(m[1]);
         return Response.json({
-          running: !!t?.running,
+          running: !!t?.running || (!!f && terminalTurnActive(f.file, f.cwd)),
           activity: t?.activity ?? "",
           pending_ui: t?.pendingUI ?? null,
         });
