@@ -30,6 +30,14 @@ cp install.sh server.ts "$I/"
 cp pi-mobile-approval/extension.ts pi-mobile-approval/package.json "$I/pi-mobile-approval/"
 ln -s "$I/install.sh" "$T/.local/bin/pi-companion"
 
+# Plain `pi-companion` (no argument) shows the status and usage. It must not install.
+HOME="$T" PATH="$T/bin:/usr/bin:/bin:/usr/sbin:/sbin" "$T/.local/bin/pi-companion" > "$T/out" 2>&1 \
+  || fail "plain pi-companion exited non-zero"
+grep -q "^stopped" "$T/out" || fail "plain pi-companion should print the status"
+grep -q "pi-companion install" "$T/out" || fail "plain pi-companion should print the usage"
+[[ -e "$T/Library/LaunchAgents/co.bungy.pi-companion.plist" || -e "$I/co.bungy.pi-companion.plist" ]] \
+  && fail "plain pi-companion installed a plist"
+
 HOME="$T" PATH="$T/bin:/usr/bin:/bin:/usr/sbin:/sbin" "$T/.local/bin/pi-companion" --always-on > "$T/out" 2>&1 \
   || fail "install through the symlink exited non-zero"
 [[ -e "$T/curl-called" ]] && fail "downloaded from GitHub: $(cat "$T/curl-called")"

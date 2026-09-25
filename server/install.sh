@@ -7,7 +7,8 @@
 #   install.sh --uninstall
 #
 # The installer puts a copy at ~/.pi-companion/install.sh and links it as
-# ~/.local/bin/pi-companion, so `pi-companion stop` works without a checkout.
+# ~/.local/bin/pi-companion. Plain `pi-companion` shows the status; reinstall
+# with `pi-companion install` or `pi-companion --always-on`.
 set -euo pipefail
 
 LABEL="co.bungy.pi-companion"
@@ -25,9 +26,13 @@ REPO_RAW="https://raw.githubusercontent.com/MRL-00/pi-mobile/main/server"
 # LaunchAgents don't inherit your shell PATH — include where bun/pi usually live.
 AGENT_PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-usage() { sed -n '2,10p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || echo "usage: install.sh [--always-on] | start | stop | status | --uninstall"; }
+usage() { sed -n '2,11p' "$SELF" 2>/dev/null | sed 's/^# \{0,1\}//' || echo "usage: install.sh [--always-on] | start | stop | status | --uninstall"; }
 
 CMD=install
+# The installed copy (pi-companion) with no argument shows the status, so a
+# stray run never reinstalls or switches the mode. A checkout or `curl | bash`
+# with no argument still installs.
+[[ $# -eq 0 && "$DIR" == "$LOG_DIR" ]] && CMD=status
 ALWAYS_ON=0
 for a in "$@"; do
   case "$a" in
@@ -119,6 +124,7 @@ case "$CMD" in
   status)
     if running; then echo "running (pid $(service_pid)) — $(mode)"
     else echo "stopped — $(mode)"; fi
+    [[ $# -eq 0 ]] && { echo; usage; }
     exit 0 ;;
 
   stop)
