@@ -39,6 +39,13 @@ running && fail "final assistant reply → should be stopped"
 printf '%s\n' "$user" >> "$F"
 running || fail "new user message → should be running"
 
+# A resumed older session: a newer-named file holds a finished turn, but the
+# terminal writes to the older file. The badge follows the last-modified file.
+F2="$DIR/2026-02-01T00-00-00-000Z_s2.jsonl"
+printf '%s\n%s\n%s\n' "${hdr//s1/s2}" "$user" "$done_" > "$F2"; touch -t 202001010000 "$F2"
+sleep 2.1
+[[ "$(status)" == '"status":"in-progress"' ]] || fail "resumed older session → badge in-progress, got $(status)"
+
 kill "$FAKEPI"; wait "$FAKEPI" 2>/dev/null || true; FAKEPI=
 running && fail "pi exited → should be stopped"
 echo "PASS"
