@@ -53,10 +53,10 @@ Control it from any terminal (no checkout needed):
 pi-companion start    # start and print the QR + token
 pi-companion stop     # stop it when you finish (the Mac can sleep again)
 pi-companion status   # also what plain `pi-companion` does
-pi-companion install  # reinstall on demand (add --always-on to keep it always on)
+pi-companion install  # reinstall; keeps the current mode
 ```
 
-To keep it always on (start at every login), install with `--always-on`:
+To keep it always on (start at every login), install with `--always-on`. A later reinstall keeps that mode. Switch back with `pi-companion install --on-demand`.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/MRL-00/pi-mobile/main/server/install.sh | bash -s -- --always-on
