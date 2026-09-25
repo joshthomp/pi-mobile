@@ -1017,19 +1017,25 @@ type BridgeCommand =
 type BridgeResult = { id: string; ok: boolean; error?: string };
 type Bridge = {
   pid: number; sessionId: string; sessionFile: string; cwd: string;
-  running: boolean; activity: string; lastSeen: number;
+  running: boolean; activity: string; lastSeen: number; sentAt: number;
   queue: BridgeCommand[];
   waiter: ((cmds: BridgeCommand[]) => void) | null;
   results: Map<string, (r: BridgeResult) => void>;
 };
 const BRIDGE_HOLD_MS = Number(process.env.BRIDGE_HOLD_MS ?? 25_000);
 const BRIDGE_TTL_MS = Number(process.env.BRIDGE_TTL_MS ?? 40_000);
+// sendUserMessage can fail before agent_start (no model, no auth); only the
+// terminal sees it. After this grace, an idle poll clears the running flag.
+const BRIDGE_SEND_GRACE_MS = Number(process.env.BRIDGE_SEND_GRACE_MS ?? 10_000);
 const bridges = new Map<number, Bridge>(); // key: terminal pi pid
 
 const isLoopback = (ip?: string) => ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
 const bridgeAlive = (b: Bridge) => Date.now() - b.lastSeen < BRIDGE_TTL_MS;
 
 function bridgeFor(sessionId: string): Bridge | null {
+  // A phone (rpc) turn that is running owns the session: a bridge that
+  // registers mid-turn (e.g. after a server restart) must not hide it.
+  if (turns.get(sessionId)?.running) return null;
   let best: Bridge | null = null;
   for (const b of bridges.values())
     if (b.sessionId === sessionId && bridgeAlive(b) && (!best || b.lastSeen > best.lastSeen)) best = b;
@@ -1045,10 +1051,14 @@ function bridgeUpsert(body: any): Bridge | null {
   let b = bridges.get(pid);
   if (!b) {
     b = { pid, sessionId: "", sessionFile: "", cwd: "", running: body.idle === false, activity: "",
-          lastSeen: 0, queue: [], waiter: null, results: new Map() };
+          lastSeen: 0, sentAt: 0, queue: [], waiter: null, results: new Map() };
     bridges.set(pid, b);
   }
-  // After registration, only events change `running` (a poll's idle flag can lag a send).
+  // After registration, events drive `running`. A poll's idle flag can lag a
+  // send, so it only clears a flag that stayed set past the grace.
+  if (body.idle === true && b.running && Date.now() - b.sentAt > BRIDGE_SEND_GRACE_MS) {
+    b.running = false; b.activity = "";
+  }
   b.sessionId = body.session_id;
   if (typeof body.session_file === "string") b.sessionFile = body.session_file;
   if (typeof body.cwd === "string") b.cwd = body.cwd;
@@ -1109,7 +1119,7 @@ async function bridgeSend(b: Bridge, text: string, images: unknown): Promise<{ o
     .filter((i: any) => typeof i?.data === "string" && typeof i?.mimeType === "string")
     .map((i: any) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
   const r = await bridgeCommand(b, { id: crypto.randomUUID(), type: "send", text, ...(imgs.length ? { images: imgs } : {}) });
-  if (r.ok) { b.running = true; b.activity = "Thinking…"; return { ok: true }; } // the app polls before agent_start lands
+  if (r.ok) { b.running = true; b.sentAt = Date.now(); b.activity = "Thinking…"; return { ok: true }; } // the app polls before agent_start lands
   if (r.error === "busy") return { error: "agent is already working", status: 409 };
   if (r.error === "timeout") return { error: "terminal pi did not answer", status: 504 };
   return { error: `terminal pi: ${r.error ?? "unknown error"}`, status: 502 };
@@ -1207,7 +1217,8 @@ Bun.serve({
         const r = bridge
           ? await bridgeSend(bridge, (text ?? "").trim(), images)
           : sendMessage(m[1], (text ?? "").trim(), { model, thinking, approvalMode, images });
-        return Response.json(r, { status: "status" in r ? (r.status as number) : 200 });
+        // The app decodes error bodies as [String: String], so send only "error".
+        return "status" in r ? Response.json({ error: r.error }, { status: r.status as number }) : Response.json(r);
       }
       if (req.method === "POST" && (m = path.match(/^\/sessions\/([^/]+)\/ui-response$/))) {
         const r = respondUI(m[1], await req.json());

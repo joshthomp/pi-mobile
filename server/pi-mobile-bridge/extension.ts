@@ -74,7 +74,7 @@ export default function (pi: ExtensionAPI) {
       } catch {
         if (!active) return;
         await new Promise((r) => setTimeout(r, delay));
-        delay = Math.min(delay * 2, 30_000);
+        delay = Math.min(delay * 2, 5_000); // short cap: the phone needs the bridge soon after `pi-companion start`
       }
     }
   }
