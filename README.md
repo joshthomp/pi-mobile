@@ -45,7 +45,23 @@ curl -fsSL https://raw.githubusercontent.com/MRL-00/pi-mobile/main/server/instal
 
 (Or from a checkout: `./server/install.sh`.)
 
-This installs a login LaunchAgent that keeps the server running (and the Mac awake via `caffeinate -s`), auto-restarts it, and prints the auth token for the phone app. Token persists in `~/.pi-companion/token`; logs in `~/.pi-companion/server.log`. Uninstall with `./server/install.sh --uninstall`. (Or just run it manually: `cd server && bun run server.ts`.)
+This starts the server now and prints the auth token and pairing QR for the phone app. By default it runs **on demand**: it does not start at login. While it runs, it keeps the Mac awake (`caffeinate -s`) and restarts after a crash.
+
+Control it from any terminal (no checkout needed):
+
+```sh
+pi-companion start    # start and print the QR + token
+pi-companion stop     # stop it when you finish (the Mac can sleep again)
+pi-companion status
+```
+
+To keep it always on (start at every login), install with `--always-on`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/MRL-00/pi-mobile/main/server/install.sh | bash -s -- --always-on
+```
+
+`pi-companion` links to `~/.pi-companion/install.sh`. If `~/.local/bin` is not on your `PATH`, run that file directly. If you installed before these commands existed, run the install line again to get them. `stop` also ends any agent turn that is running. Token persists in `~/.pi-companion/token`; logs in `~/.pi-companion/server.log`. Uninstall with `pi-companion --uninstall`. (Or just run it manually: `cd server && bun run server.ts`.)
 
 ### iPhone
 
