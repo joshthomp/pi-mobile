@@ -1007,8 +1007,12 @@ const terminalTurnActive = (file: string, cwd: string) => {
 
 function workspaceStatus(ws: Ws): string {
   if ([...turns.values()].some((t) => t.running && t.cwd === ws.cwd)) return "in-progress";
-  const newest = ws.dir ? sessionFiles(ws.dir)[0] : null;
-  if (newest && terminalTurnActive(`${ws.dir}/${newest}`, ws.cwd)) return "in-progress";
+  // The last-modified file, not the newest name: a terminal can resume an older session.
+  const dir = ws.dir;
+  const latest = dir && sessionFiles(dir)
+    .map((f) => `${dir}/${f}`)
+    .reduce<string | null>((a, f) => (!a || statSync(f).mtimeMs > statSync(a).mtimeMs ? f : a), null);
+  if (latest && terminalTurnActive(latest, ws.cwd)) return "in-progress";
   // Fresh workspaces / no sessions on disk yet — not “done”, just waiting for first send.
   if (!ws.dir || ws.sessionCount === 0) return "not-started";
   return "done";
