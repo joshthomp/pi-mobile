@@ -46,6 +46,10 @@ printf '%s\n%s\n%s\n' "${hdr//s1/s2}" "$user" "$done_" > "$F2"; touch -t 2020010
 sleep 2.1
 [[ "$(status)" == '"status":"in-progress"' ]] || fail "resumed older session → badge in-progress, got $(status)"
 
+# A session file that vanishes mid-check (here: a broken link) must not break the badge.
+ln -s "$T/missing" "$DIR/2025-01-01T00-00-00-000Z_gone.jsonl"
+[[ "$(status)" == '"status":"in-progress"' ]] || fail "vanished session file: badge should still work, got $(status)"
+
 kill "$FAKEPI"; wait "$FAKEPI" 2>/dev/null || true; FAKEPI=
 running && fail "pi exited → should be stopped"
 echo "PASS"

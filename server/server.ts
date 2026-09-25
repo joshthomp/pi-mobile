@@ -1009,9 +1009,12 @@ function workspaceStatus(ws: Ws): string {
   if ([...turns.values()].some((t) => t.running && t.cwd === ws.cwd)) return "in-progress";
   // The last-modified file, not the newest name: a terminal can resume an older session.
   const dir = ws.dir;
+  // A file can vanish between readdir and stat (Pi deletes a session): skip it.
+  const mtime = (f: string) => { try { return statSync(f).mtimeMs; } catch { return -1; } };
   const latest = dir && sessionFiles(dir)
-    .map((f) => `${dir}/${f}`)
-    .reduce<string | null>((a, f) => (!a || statSync(f).mtimeMs > statSync(a).mtimeMs ? f : a), null);
+    .map((f) => ({ f: `${dir}/${f}`, t: mtime(`${dir}/${f}`) }))
+    .filter((x) => x.t >= 0)
+    .reduce<{ f: string; t: number } | null>((a, x) => (!a || x.t > a.t ? x : a), null)?.f;
   if (latest && terminalTurnActive(latest, ws.cwd)) return "in-progress";
   // Fresh workspaces / no sessions on disk yet — not “done”, just waiting for first send.
   if (!ws.dir || ws.sessionCount === 0) return "not-started";
