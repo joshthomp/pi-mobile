@@ -27,6 +27,7 @@ done
 if [[ "${1:-}" == "--uninstall" ]]; then
   launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
   rm -f "$PLIST"
+  PATH="$AGENT_PATH:$PATH" pi remove "$LOG_DIR/pi-mobile-bridge" >/dev/null 2>&1 || true
   echo "Uninstalled."
   exit 0
 fi
@@ -45,6 +46,10 @@ if [[ -f "$DIR/server.ts" ]]; then
     rm -rf "$LOG_DIR/pi-mobile-approval"
     cp -R "$DIR/pi-mobile-approval" "$LOG_DIR/pi-mobile-approval"
   fi
+  if [[ -d "$DIR/pi-mobile-bridge" ]]; then
+    rm -rf "$LOG_DIR/pi-mobile-bridge"
+    cp -R "$DIR/pi-mobile-bridge" "$LOG_DIR/pi-mobile-bridge"
+  fi
 else
   echo "Downloading server.ts…"
   curl -fsSL "$REPO_RAW/server.ts" -o "$LOG_DIR/server.ts"
@@ -52,12 +57,26 @@ else
   mkdir -p "$LOG_DIR/pi-mobile-approval"
   curl -fsSL "$REPO_RAW/pi-mobile-approval/extension.ts" -o "$LOG_DIR/pi-mobile-approval/extension.ts"
   curl -fsSL "$REPO_RAW/pi-mobile-approval/package.json" -o "$LOG_DIR/pi-mobile-approval/package.json"
+  echo "Downloading pi-mobile-bridge…"
+  mkdir -p "$LOG_DIR/pi-mobile-bridge"
+  curl -fsSL "$REPO_RAW/pi-mobile-bridge/extension.ts" -o "$LOG_DIR/pi-mobile-bridge/extension.ts"
+  curl -fsSL "$REPO_RAW/pi-mobile-bridge/package.json" -o "$LOG_DIR/pi-mobile-bridge/package.json"
 fi
 DIR="$LOG_DIR"
 # Ask mode fails closed without this package — don't launch a half-installed agent.
 if [[ ! -f "$DIR/pi-mobile-approval/extension.ts" || ! -f "$DIR/pi-mobile-approval/package.json" ]]; then
   echo "error: pi-mobile-approval package missing in $DIR (needed for Ask mode)." >&2
   exit 1
+fi
+
+# Terminal bridge: lets the phone see, stop and message terminal pi sessions.
+# Optional: a failed install only loses that feature.
+if [[ -f "$DIR/pi-mobile-bridge/extension.ts" ]]; then
+  if PATH="$AGENT_PATH:$PATH" pi install "$DIR/pi-mobile-bridge" >/dev/null 2>&1; then
+    echo "Installed the pi-mobile-bridge Pi extension (terminal pi sessions started from now on connect to the phone)."
+  else
+    echo "warning: 'pi install $DIR/pi-mobile-bridge' failed — the phone cannot drive terminal pi sessions." >&2
+  fi
 fi
 
 # caffeinate -s keeps the Mac awake (on AC power) so agents can run while you're away

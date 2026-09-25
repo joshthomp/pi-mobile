@@ -59,6 +59,7 @@ Open `PiMobile.xcodeproj` in Xcode (26+), build to your device (iOS 26+). Then e
 
 - Turns default to **Auto** tool permissions. **Ask** mode confirms each tool on the phone via the bundled `server/pi-mobile-approval` extension (loaded for that turn; optional `pi install` for desktop use too).
 - A turn running in a terminal `pi` shows as in progress on the phone and updates at each step. The phone detects it from the session file plus a live `pi` process in that folder.
+- The installer also adds the `pi-mobile-bridge` Pi extension. Terminal `pi` sessions started after the install connect to the companion server on this Mac. From the phone you can then stop a running terminal turn, and send the next message into that same terminal. The phone's model and Ask/Auto choice do not apply to terminal sessions. The terminal keeps its own. Sessions that were already open need a restart or `/reload`.
 - A session that's open in a terminal `pi` and driven from the phone at the same time can race; finish one before the other (Pi's file format keeps history safe either way).
 - Session titles are derived from the first user message (Pi sessions have no title field).
 
