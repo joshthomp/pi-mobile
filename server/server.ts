@@ -408,6 +408,7 @@ function piEnv(extra: Record<string, string> = {}): Record<string, string> {
     ...process.env as Record<string, string>,
     HOME: process.env.HOME || homedir(),
     PATH: pathParts.join(":"),
+    PI_MOBILE_RPC: "1", // pi-mobile-bridge stays off in server-started pi
     ...extra,
   };
 }
@@ -1005,8 +1006,118 @@ const terminalTurnActive = (file: string, cwd: string) => {
     return lastTurnOpen(readFileSync(file, "utf8")); } catch { return false; }
 };
 
+// ── Terminal bridges ────────────────────────────────────────────────────────
+// A terminal `pi` with the pi-mobile-bridge extension long-polls /bridge/poll
+// for commands and reports state with /bridge/event. In memory only: after a
+// server restart each bridge registers again on its next poll.
+type BridgeImage = { type: "image"; data: string; mimeType: string };
+type BridgeCommand =
+  | { id: string; type: "send"; text: string; images?: BridgeImage[] }
+  | { id: string; type: "stop" };
+type BridgeResult = { id: string; ok: boolean; error?: string };
+type Bridge = {
+  pid: number; sessionId: string; sessionFile: string; cwd: string;
+  running: boolean; activity: string; lastSeen: number;
+  queue: BridgeCommand[];
+  waiter: ((cmds: BridgeCommand[]) => void) | null;
+  results: Map<string, (r: BridgeResult) => void>;
+};
+const BRIDGE_HOLD_MS = Number(process.env.BRIDGE_HOLD_MS ?? 25_000);
+const BRIDGE_TTL_MS = Number(process.env.BRIDGE_TTL_MS ?? 40_000);
+const bridges = new Map<number, Bridge>(); // key: terminal pi pid
+
+const isLoopback = (ip?: string) => ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+const bridgeAlive = (b: Bridge) => Date.now() - b.lastSeen < BRIDGE_TTL_MS;
+
+function bridgeFor(sessionId: string): Bridge | null {
+  let best: Bridge | null = null;
+  for (const b of bridges.values())
+    if (b.sessionId === sessionId && bridgeAlive(b) && (!best || b.lastSeen > best.lastSeen)) best = b;
+  return best;
+}
+const bridgeRunningIn = (cwd: string) =>
+  [...bridges.values()].some((b) => b.cwd === cwd && b.running && bridgeAlive(b));
+
+// Register or refresh a bridge from a poll body. null → bad body.
+function bridgeUpsert(body: any): Bridge | null {
+  const pid = Number(body?.pid);
+  if (!Number.isInteger(pid) || pid <= 0 || typeof body?.session_id !== "string" || !body.session_id) return null;
+  let b = bridges.get(pid);
+  if (!b) {
+    b = { pid, sessionId: "", sessionFile: "", cwd: "", running: body.idle === false, activity: "",
+          lastSeen: 0, queue: [], waiter: null, results: new Map() };
+    bridges.set(pid, b);
+  }
+  // After registration, only events change `running` (a poll's idle flag can lag a send).
+  b.sessionId = body.session_id;
+  if (typeof body.session_file === "string") b.sessionFile = body.session_file;
+  if (typeof body.cwd === "string") b.cwd = body.cwd;
+  b.lastSeen = Date.now();
+  return b;
+}
+
+function bridgePoll(b: Bridge): Promise<BridgeCommand[]> {
+  b.waiter?.([]); // a newer poll replaces an older one
+  b.waiter = null;
+  if (b.queue.length) return Promise.resolve(b.queue.splice(0));
+  return new Promise((resolve) => {
+    const done = (cmds: BridgeCommand[]) => { clearTimeout(timer); resolve(cmds); };
+    const timer = setTimeout(() => { if (b.waiter === done) b.waiter = null; resolve([]); }, BRIDGE_HOLD_MS);
+    b.waiter = done;
+  });
+}
+
+function bridgeEnqueue(b: Bridge, cmd: BridgeCommand) {
+  b.queue.push(cmd);
+  const w = b.waiter;
+  if (w) { b.waiter = null; w(b.queue.splice(0)); }
+}
+
+// Queue a command and wait for the bridge's result. On timeout the command is
+// dropped, so it never runs late.
+function bridgeCommand(b: Bridge, cmd: BridgeCommand, timeoutMs = 5_000): Promise<BridgeResult> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      b.results.delete(cmd.id);
+      b.queue = b.queue.filter((c) => c.id !== cmd.id);
+      resolve({ id: cmd.id, ok: false, error: "timeout" });
+    }, timeoutMs);
+    b.results.set(cmd.id, (r) => { clearTimeout(timer); b.results.delete(cmd.id); resolve(r); });
+    bridgeEnqueue(b, cmd);
+  });
+}
+
+function bridgeEvent(body: any): boolean {
+  const b = bridges.get(Number(body?.pid));
+  if (!b) return false;
+  b.lastSeen = Date.now();
+  if (typeof body.session_id === "string" && body.session_id) b.sessionId = body.session_id;
+  if (body.state === "running") { b.running = true; b.activity = "Thinking…"; }
+  if (body.state === "idle") { b.running = false; b.activity = ""; }
+  if (typeof body.activity === "string" && b.running) b.activity = body.activity.slice(0, 200);
+  const r = body.result;
+  if (r && typeof r.id === "string")
+    b.results.get(r.id)?.({ id: r.id, ok: r.ok === true, error: typeof r.error === "string" ? r.error : undefined });
+  if (body.gone === true) { b.waiter?.([]); bridges.delete(b.pid); }
+  return true;
+}
+
+// Phone send into a terminal pi. Returns the same shapes as sendMessage().
+async function bridgeSend(b: Bridge, text: string, images: unknown): Promise<{ ok: true } | { error: string; status: number }> {
+  if (b.running) return { error: "agent is already working", status: 409 };
+  const imgs: BridgeImage[] = (Array.isArray(images) ? images : [])
+    .filter((i: any) => typeof i?.data === "string" && typeof i?.mimeType === "string")
+    .map((i: any) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
+  const r = await bridgeCommand(b, { id: crypto.randomUUID(), type: "send", text, ...(imgs.length ? { images: imgs } : {}) });
+  if (r.ok) { b.running = true; b.activity = "Thinking…"; return { ok: true }; } // the app polls before agent_start lands
+  if (r.error === "busy") return { error: "agent is already working", status: 409 };
+  if (r.error === "timeout") return { error: "terminal pi did not answer", status: 504 };
+  return { error: `terminal pi: ${r.error ?? "unknown error"}`, status: 502 };
+}
+
 function workspaceStatus(ws: Ws): string {
   if ([...turns.values()].some((t) => t.running && t.cwd === ws.cwd)) return "in-progress";
+  if (bridgeRunningIn(ws.cwd)) return "in-progress";
   const newest = ws.dir ? sessionFiles(ws.dir)[0] : null;
   if (newest && terminalTurnActive(`${ws.dir}/${newest}`, ws.cwd)) return "in-progress";
   // Fresh workspaces / no sessions on disk yet — not “done”, just waiting for first send.
@@ -1057,13 +1168,30 @@ async function workspaceDiff(workspaceId: string) {
 Bun.serve({
   port: PORT,
   hostname: "0.0.0.0",
-  async fetch(req) {
+  idleTimeout: 30, // /bridge/poll holds up to 25 s; Bun's default is 10 s
+  async fetch(req, server) {
     if (req.headers.get("authorization") !== `Bearer ${TOKEN}`)
       return Response.json({ error: "unauthorized" }, { status: 401 });
 
     const path = new URL(req.url).pathname;
     let m: RegExpMatchArray | null;
     try {
+      if (path.startsWith("/bridge/")) {
+        if (!isLoopback(server.requestIP(req)?.address))
+          return Response.json({ error: "bridge routes are local only" }, { status: 403 });
+        if (req.method === "GET" && path === "/bridge/list")
+          return Response.json([...bridges.values()].filter(bridgeAlive).map((b) =>
+            ({ pid: b.pid, session_id: b.sessionId, cwd: b.cwd, running: b.running, activity: b.activity })));
+        const body = await req.json().catch(() => null);
+        if (req.method === "POST" && path === "/bridge/poll") {
+          const b = bridgeUpsert(body);
+          if (!b) return Response.json({ error: "bad poll body" }, { status: 400 });
+          return Response.json({ commands: await bridgePoll(b) });
+        }
+        if (req.method === "POST" && path === "/bridge/event")
+          return bridgeEvent(body) ? Response.json({ ok: true }) : Response.json({ error: "unknown bridge" }, { status: 404 });
+        return Response.json({ error: "not found" }, { status: 404 });
+      }
       if (req.method === "POST" && path === "/pi-update") {
         const result = await updatePiInstall();
         return "error" in result
@@ -1074,7 +1202,11 @@ Bun.serve({
         const { text, model, thinking, approvalMode, images } = await req.json();
         const hasImages = Array.isArray(images) && images.length > 0;
         if (!text?.trim() && !hasImages) return Response.json({ error: "empty message" }, { status: 400 });
-        const r = sendMessage(m[1], (text ?? "").trim(), { model, thinking, approvalMode, images });
+        const bridge = bridgeFor(m[1]);
+        // Terminal session: the terminal owns model, thinking and approval mode.
+        const r = bridge
+          ? await bridgeSend(bridge, (text ?? "").trim(), images)
+          : sendMessage(m[1], (text ?? "").trim(), { model, thinking, approvalMode, images });
         return Response.json(r, { status: "status" in r ? (r.status as number) : 200 });
       }
       if (req.method === "POST" && (m = path.match(/^\/sessions\/([^/]+)\/ui-response$/))) {
@@ -1121,6 +1253,11 @@ Bun.serve({
         return Response.json(workspaceJSON(m[1], ws, repoOf.get(m[1]) ?? ""));
       }
       if (req.method === "POST" && (m = path.match(/^\/sessions\/([^/]+)\/stop$/))) {
+        const bridge = bridgeFor(m[1]);
+        if (bridge) {
+          bridgeEnqueue(bridge, { id: crypto.randomUUID(), type: "stop" });
+          return Response.json({ ok: true });
+        }
         const t = turns.get(m[1]);
         try { t?.proc?.stdin?.write(JSON.stringify({ id: "stop", type: "abort" }) + "\n"); } catch (e) {
           console.warn(`stop: abort write failed, killing pi instead: ${e}`); // stdin already closed
@@ -1182,6 +1319,8 @@ Bun.serve({
         return Response.json(r, { status: "status" in r ? (r.status as number) : 200 });
       }
       if ((m = path.match(/^\/sessions\/([^/]+)\/status$/))) {
+        const bridge = bridgeFor(m[1]);
+        if (bridge) return Response.json({ running: bridge.running, activity: bridge.activity, pending_ui: null });
         const t = turns.get(m[1]);
         const f = t?.running ? null : findSessionFile(m[1]);
         return Response.json({
