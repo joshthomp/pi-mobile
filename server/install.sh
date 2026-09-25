@@ -17,7 +17,10 @@ ALWAYS_PLIST="$HOME/Library/LaunchAgents/$LABEL.plist" # launchd loads this at l
 DEMAND_PLIST="$LOG_DIR/$LABEL.plist"                   # launchd never sees this unless we bootstrap it
 LINK="$HOME/.local/bin/pi-companion"
 PORT=8940
-DIR="$(cd "$(dirname "$0")" && pwd)"
+# Follow the ~/.local/bin/pi-companion symlink to the real script folder.
+# Under `curl | bash`, $0 is "bash" and this falls back to it unchanged.
+SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+DIR="$(cd "$(dirname "$SELF")" && pwd)"
 REPO_RAW="https://raw.githubusercontent.com/MRL-00/pi-mobile/main/server"
 # LaunchAgents don't inherit your shell PATH — include where bun/pi usually live.
 AGENT_PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
