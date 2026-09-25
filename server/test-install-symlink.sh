@@ -22,6 +22,12 @@ E
 printf '#!/bin/bash\nexit 1\n' > "$T/bin/lsof"                     # port free
 printf '#!/bin/bash\necho "$*" >> "$HOME/curl-called"\nexit 1\n' > "$T/bin/curl"
 printf '#!/bin/bash\nexit 0\n' > "$T/bin/bun"
+# readlink without -f, like macOS before 12.3
+cat > "$T/bin/readlink" <<'E'
+#!/bin/bash
+[[ "$1" == -* ]] && { echo "readlink: illegal option -- ${1#-}" >&2; exit 1; }
+exec /usr/bin/readlink "$@"
+E
 chmod +x "$T/bin/"*
 
 # An installed copy, as a previous install leaves it
@@ -35,6 +41,8 @@ HOME="$T" PATH="$T/bin:/usr/bin:/bin:/usr/sbin:/sbin" "$T/.local/bin/pi-companio
   || fail "plain pi-companion exited non-zero"
 grep -q "^stopped" "$T/out" || fail "plain pi-companion should print the status"
 grep -q "pi-companion install" "$T/out" || fail "plain pi-companion should print the usage"
+grep -q "install.sh --on-demand" "$T/out" || fail "usage should list every option"
+grep -q "set -euo" "$T/out" && fail "usage should stop at the first non-comment line"
 [[ -e "$T/Library/LaunchAgents/co.bungy.pi-companion.plist" || -e "$I/co.bungy.pi-companion.plist" ]] \
   && fail "plain pi-companion installed a plist"
 

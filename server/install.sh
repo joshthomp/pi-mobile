@@ -22,13 +22,20 @@ LINK="$HOME/.local/bin/pi-companion"
 PORT=8940
 # Follow the ~/.local/bin/pi-companion symlink to the real script folder.
 # Under `curl | bash`, $0 is "bash" and this falls back to it unchanged.
-SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+# No `readlink -f`: macOS before 12.3 lacks it. Follow links one hop at a time.
+SELF="$0"
+while [[ -L "$SELF" ]]; do
+  link="$(readlink "$SELF")"
+  [[ "$link" == /* ]] && SELF="$link" || SELF="$(dirname "$SELF")/$link"
+done
 DIR="$(cd "$(dirname "$SELF")" && pwd)"
 REPO_RAW="https://raw.githubusercontent.com/MRL-00/pi-mobile/main/server"
 # LaunchAgents don't inherit your shell PATH — include where bun/pi usually live.
 AGENT_PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-usage() { sed -n '2,13p' "$SELF" 2>/dev/null | sed 's/^# \{0,1\}//' || echo "usage: install.sh [--always-on] | start | stop | status | --uninstall"; }
+# The header comment is the usage text: print it up to the first non-comment line.
+usage() { awk 'NR>1 && !/^#/{exit} NR>1{sub(/^# ?/,""); print}' "$SELF" 2>/dev/null \
+  || echo "usage: install.sh [--always-on | --on-demand] | start | stop | status | --uninstall"; }
 
 CMD=install
 # The installed copy (pi-companion) with no argument shows the status, so a
