@@ -1,14 +1,16 @@
 #!/bin/bash
 # Install and control the Pi companion server (a launchd service that auto-restarts on crash).
 #
-#   install.sh                 Install on demand: start now, but not at login (default)
+#   install.sh                 Install. First install: on demand (starts now, not at login).
+#                              Reinstall: keeps the current mode.
 #   install.sh --always-on     Install always on: also start at every login
+#   install.sh --on-demand     Install on demand: start now, but not at login
 #   install.sh start|stop|status
 #   install.sh --uninstall
 #
 # The installer puts a copy at ~/.pi-companion/install.sh and links it as
 # ~/.local/bin/pi-companion. Plain `pi-companion` shows the status; reinstall
-# with `pi-companion install` or `pi-companion --always-on`.
+# with `pi-companion install`.
 set -euo pipefail
 
 LABEL="co.bungy.pi-companion"
@@ -26,17 +28,18 @@ REPO_RAW="https://raw.githubusercontent.com/MRL-00/pi-mobile/main/server"
 # LaunchAgents don't inherit your shell PATH — include where bun/pi usually live.
 AGENT_PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-usage() { sed -n '2,11p' "$SELF" 2>/dev/null | sed 's/^# \{0,1\}//' || echo "usage: install.sh [--always-on] | start | stop | status | --uninstall"; }
+usage() { sed -n '2,13p' "$SELF" 2>/dev/null | sed 's/^# \{0,1\}//' || echo "usage: install.sh [--always-on] | start | stop | status | --uninstall"; }
 
 CMD=install
 # The installed copy (pi-companion) with no argument shows the status, so a
 # stray run never reinstalls or switches the mode. A checkout or `curl | bash`
 # with no argument still installs.
 [[ $# -eq 0 && "$DIR" == "$LOG_DIR" ]] && CMD=status
-ALWAYS_ON=0
+ALWAYS_ON="" # empty: keep the current mode (on demand for a first install)
 for a in "$@"; do
   case "$a" in
     --always-on) ALWAYS_ON=1 ;;
+    --on-demand) ALWAYS_ON=0 ;;
     --uninstall|uninstall) CMD=uninstall ;;
     install|start|stop|status) CMD="$a" ;;
     -h|--help|help) usage; exit 0 ;;
@@ -195,6 +198,7 @@ if [[ -f "$LEGACY_PLIST" ]]; then
 fi
 
 stop_service
+if [[ -z "$ALWAYS_ON" ]]; then [[ -f "$ALWAYS_PLIST" ]] && ALWAYS_ON=1 || ALWAYS_ON=0; fi
 rm -f "$ALWAYS_PLIST" "$DEMAND_PLIST" # one mode at a time
 if [[ "$ALWAYS_ON" == 1 ]]; then PLIST="$ALWAYS_PLIST"; else PLIST="$DEMAND_PLIST"; fi
 

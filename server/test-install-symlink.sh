@@ -43,4 +43,17 @@ HOME="$T" PATH="$T/bin:/usr/bin:/bin:/usr/sbin:/sbin" "$T/.local/bin/pi-companio
 [[ -e "$T/curl-called" ]] && fail "downloaded from GitHub: $(cat "$T/curl-called")"
 [[ -f "$T/Library/LaunchAgents/co.bungy.pi-companion.plist" ]] || fail "no always-on plist written"
 grep -q "$I/server.ts" "$T/Library/LaunchAgents/co.bungy.pi-companion.plist" || fail "plist does not run the installed server.ts"
+
+# A plain reinstall keeps the current mode (always on here).
+run() { HOME="$T" PATH="$T/bin:/usr/bin:/bin:/usr/sbin:/sbin" "$T/.local/bin/pi-companion" "$@" > "$T/out" 2>&1 || fail "pi-companion $* exited non-zero"; }
+run install
+[[ -f "$T/Library/LaunchAgents/co.bungy.pi-companion.plist" && ! -f "$I/co.bungy.pi-companion.plist" ]] \
+  || fail "install should keep always on"
+# --on-demand switches back, and a later plain reinstall keeps on demand.
+run install --on-demand
+[[ -f "$I/co.bungy.pi-companion.plist" && ! -f "$T/Library/LaunchAgents/co.bungy.pi-companion.plist" ]] \
+  || fail "--on-demand should switch to on demand"
+run install
+[[ -f "$I/co.bungy.pi-companion.plist" && ! -f "$T/Library/LaunchAgents/co.bungy.pi-companion.plist" ]] \
+  || fail "install should keep on demand"
 echo "PASS"
